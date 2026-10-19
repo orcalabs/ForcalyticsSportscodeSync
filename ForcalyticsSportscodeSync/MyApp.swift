@@ -1,10 +1,9 @@
 
-import SwiftUI
 import AppKit
 import Combine
 import MenuBarExtraAccess
+import SwiftUI
 import UniformTypeIdentifiers
-
 
 @main
 struct MyApp: App {
@@ -25,7 +24,6 @@ struct MyApp: App {
         .menuBarExtraStyle(.window)
     }
 }
-
 
 @MainActor
 final class SyncManager: ObservableObject {
@@ -54,7 +52,8 @@ final class SyncManager: ObservableObject {
               ["http", "https"].contains(
                   parsedURL.scheme?.lowercased() ?? ""
               ),
-              parsedURL.host != nil else {
+              parsedURL.host != nil
+        else {
             status = "Invalid URL"
             return
         }
@@ -79,9 +78,9 @@ final class SyncManager: ObservableObject {
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.isSyncing else { return }
+                guard let self, isSyncing else { return }
 
-                self.syncTask = Task { [weak self] in
+                syncTask = Task { [weak self] in
                     await self?.runSync()
                 }
             }
@@ -110,7 +109,7 @@ final class SyncManager: ObservableObject {
 
         syncTask?.cancel()
         syncTask = nil
-        
+
         status = "Stopped"
     }
 
@@ -178,7 +177,7 @@ final class SyncManager: ObservableObject {
                 return
             }
 
-            guard (200...299).contains(httpResponse.statusCode) else {
+            guard (200 ... 299).contains(httpResponse.statusCode) else {
                 status = "HTTP error: \(httpResponse.statusCode)"
                 return
             }
@@ -195,7 +194,7 @@ final class SyncManager: ObservableObject {
 
             if fileManager.fileExists(atPath: destinationURL.path) {
                 let existingData = try Data(contentsOf: destinationURL)
-                
+
                 if existingData == data {
                     print("GET successful. No changes detected.")
                 } else {
@@ -230,7 +229,6 @@ final class SyncManager: ObservableObject {
     }
 }
 
-
 struct MenuBarView: View {
     @StateObject private var syncManager = SyncManager()
 
@@ -242,17 +240,18 @@ struct MenuBarView: View {
 
     @AppStorage("syncDestinationFilename")
     private var destinationFilename = "sportscode-sync.json"
-    
+
     @AppStorage("syncIntervalSeconds")
     private var syncIntervalSeconds = 5
-    
+
     @Binding var isMenuPresented: Bool
-    
+
     private var destinationURL: URL? {
         guard !destinationFolder.isEmpty,
               !destinationFilename.trimmingCharacters(
-                in: .whitespacesAndNewlines
-              ).isEmpty else {
+                  in: .whitespacesAndNewlines
+              ).isEmpty
+        else {
             return nil
         }
 
@@ -263,10 +262,11 @@ struct MenuBarView: View {
     private var canStartSync: Bool {
         guard let url = URL(string: requestURL),
               ["http", "https"].contains(
-                url.scheme?.lowercased() ?? ""
+                  url.scheme?.lowercased() ?? ""
               ),
               url.host != nil,
-              destinationURL != nil else {
+              destinationURL != nil
+        else {
             return false
         }
 
@@ -343,7 +343,7 @@ struct MenuBarView: View {
                 .textFieldStyle(.roundedBorder)
                 .disabled(syncManager.isSyncing)
             }
-            
+
             VStack(alignment: .leading, spacing: 5) {
                 Text("Sync interval (seconds)")
                     .font(.caption)
@@ -370,7 +370,8 @@ struct MenuBarView: View {
                     set: { enabled in
                         if enabled {
                             guard canStartSync,
-                                  let destinationURL else {
+                                  let destinationURL
+                            else {
                                 syncManager.status =
                                     "Set URL and choose a folder"
                                 return
@@ -428,7 +429,7 @@ struct MenuBarView: View {
         .padding()
         .frame(width: 340)
     }
-    
+
     private func chooseFolder() {
         let panel = NSOpenPanel()
         panel.prompt = "Choose"
@@ -441,7 +442,8 @@ struct MenuBarView: View {
 
         panel.begin { response in
             guard response == .OK,
-                  let folderURL = panel.url else {
+                  let folderURL = panel.url
+            else {
                 return
             }
 
