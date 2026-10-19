@@ -227,7 +227,7 @@ struct MenuBarView: View {
     @StateObject private var syncManager = SyncManager()
 
     @AppStorage("syncRequestURL")
-    private var requestURL = "http://192.168.0.60:8080/v1.0/live_streams/export_sportscode"
+    private var requestURL = "https://api.dev.forcalytics.orcalabs.no/v1.0/live_streams/export_sportscode"
 
     @AppStorage("syncDestinationFolder")
     private var destinationFolder = ""
