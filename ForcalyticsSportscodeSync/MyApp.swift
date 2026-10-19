@@ -27,8 +27,6 @@ struct MyApp: App {
 }
 
 
-// MARK: - Sync Manager
-
 @MainActor
 final class SyncManager: ObservableObject {
     @Published var isSyncing = false
@@ -224,7 +222,6 @@ final class SyncManager: ObservableObject {
     }
 }
 
-// MARK: - Menu Bar View
 
 struct MenuBarView: View {
     @StateObject private var syncManager = SyncManager()
@@ -239,11 +236,7 @@ struct MenuBarView: View {
     private var destinationFilename = "sportscode-sync.json"
     
     @Binding var isMenuPresented: Bool
-
-    @State private var showingFolderImporter = false
     
-    @Environment(\.openWindow) private var openWindow
-
     private var destinationURL: URL? {
         guard !destinationFolder.isEmpty,
               !destinationFilename.trimmingCharacters(
@@ -293,7 +286,6 @@ struct MenuBarView: View {
 
             Divider()
 
-            // Request URL
             VStack(alignment: .leading, spacing: 5) {
                 Text("Request URL")
                     .font(.caption)
@@ -307,7 +299,6 @@ struct MenuBarView: View {
                 .disabled(syncManager.isSyncing)
             }
 
-            // Destination folder
             VStack(alignment: .leading, spacing: 6) {
                 Text("Destination folder")
                     .font(.caption)
@@ -329,7 +320,6 @@ struct MenuBarView: View {
                 .textSelection(.enabled)
             }
 
-            // Destination filename
             VStack(alignment: .leading, spacing: 5) {
                 Text("Filename")
                     .font(.caption)
@@ -345,7 +335,6 @@ struct MenuBarView: View {
 
             Divider()
 
-            // Sync toggle
             Toggle(
                 "Enable syncing",
                 isOn: Binding(
@@ -371,7 +360,6 @@ struct MenuBarView: View {
             )
             .toggleStyle(.switch)
 
-            // Status
             HStack(alignment: .top) {
                 Text("Status")
                     .foregroundStyle(.secondary)
@@ -385,7 +373,6 @@ struct MenuBarView: View {
             }
             .font(.caption)
 
-            // Last successful sync
             HStack {
                 Text("Last sync")
                     .foregroundStyle(.secondary)
