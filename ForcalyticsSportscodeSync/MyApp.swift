@@ -43,13 +43,24 @@ final class SyncManager: ObservableObject {
     private var destinationURL: URL?
     private var securityScopedAccess = false
 
-    func startSync(url: String, destination: URL) {
+    func startSync(
+        url: String,
+        destination: URL,
+        interval: Int
+    ) {
         guard !isSyncing else { return }
 
         guard let parsedURL = URL(string: url),
-              ["http", "https"].contains(parsedURL.scheme?.lowercased() ?? ""),
+              ["http", "https"].contains(
+                  parsedURL.scheme?.lowercased() ?? ""
+              ),
               parsedURL.host != nil else {
             status = "Invalid URL"
+            return
+        }
+
+        guard interval >= 1 else {
+            status = "Interval must be at least 1 second"
             return
         }
 
@@ -58,15 +69,13 @@ final class SyncManager: ObservableObject {
         isSyncing = true
         status = "Syncing"
 
-        // Run immediately.
         syncTask = Task { [weak self] in
             await self?.runSync()
         }
 
-        // Repeat every 5 seconds.
         syncTimer?.invalidate()
         syncTimer = Timer.scheduledTimer(
-            withTimeInterval: 5,
+            withTimeInterval: TimeInterval(interval),
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -78,10 +87,9 @@ final class SyncManager: ObservableObject {
             }
         }
 
-        // Update elapsed time every second.
         elapsedTimer?.invalidate()
         elapsedTimer = Timer.scheduledTimer(
-            withTimeInterval: 1,
+            withTimeInterval: 0.5,
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -235,6 +243,9 @@ struct MenuBarView: View {
     @AppStorage("syncDestinationFilename")
     private var destinationFilename = "sportscode-sync.json"
     
+    @AppStorage("syncIntervalSeconds")
+    private var syncIntervalSeconds = 5
+    
     @Binding var isMenuPresented: Bool
     
     private var destinationURL: URL? {
@@ -332,6 +343,23 @@ struct MenuBarView: View {
                 .textFieldStyle(.roundedBorder)
                 .disabled(syncManager.isSyncing)
             }
+            
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Sync interval (seconds)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    TextField(
+                        "5",
+                        value: $syncIntervalSeconds,
+                        format: .number
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 100)
+                    .disabled(syncManager.isSyncing)
+                }
+            }
 
             Divider()
 
@@ -350,7 +378,8 @@ struct MenuBarView: View {
 
                             syncManager.startSync(
                                 url: requestURL,
-                                destination: destinationURL
+                                destination: destinationURL,
+                                interval: syncIntervalSeconds
                             )
                         } else {
                             syncManager.stopSync()
