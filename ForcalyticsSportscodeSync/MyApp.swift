@@ -37,33 +37,18 @@ final class SyncManager: ObservableObject {
     private var isRunningSync = false
     private var syncTask: Task<Void, Never>?
 
-    private var requestURLString = ""
+    private var requestURL: URL?
     private var destinationURL: URL?
     private var securityScopedAccess = false
 
     func startSync(
-        url: String,
+        url: URL,
         destination: URL,
         interval: Int
     ) {
         guard !isSyncing else { return }
 
-        guard let parsedURL = URL(string: url),
-              ["http", "https"].contains(
-                  parsedURL.scheme?.lowercased() ?? ""
-              ),
-              parsedURL.host != nil
-        else {
-            status = "Invalid URL"
-            return
-        }
-
-        guard interval >= 1 else {
-            status = "Interval must be at least 1 second"
-            return
-        }
-
-        requestURLString = url
+        requestURL = url
         destinationURL = destination
         isSyncing = true
         status = "Syncing"
@@ -144,13 +129,12 @@ final class SyncManager: ObservableObject {
     }
 
     private func runSync() async {
-        guard isSyncing, !isRunningSync else { return }
-        guard let destinationURL else {
-            status = "Choose a destination folder"
-            return
-        }
-        guard let url = URL(string: requestURLString) else {
-            status = "Invalid URL"
+        guard
+            isSyncing,
+            !isRunningSync,
+            let requestURL,
+            let destinationURL
+        else {
             return
         }
 
@@ -160,7 +144,7 @@ final class SyncManager: ObservableObject {
         status = "Fetching data..."
 
         do {
-            var request = URLRequest(url: url)
+            var request = URLRequest(url: requestURL)
             request.httpMethod = "GET"
             request.timeoutInterval = 30
             request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -233,44 +217,139 @@ struct MenuBarView: View {
     @StateObject private var syncManager = SyncManager()
 
     @AppStorage("syncRequestURL")
-    private var requestURL = "https://api.dev.forcalytics.orcalabs.no/v1.0/live_streams/export_sportscode"
+    private var requestURLInput = "https://api.dev.forcalytics.orcalabs.no/v1.0/live_streams/export_sportscode"
 
     @AppStorage("syncDestinationFolder")
-    private var destinationFolder = ""
+    private var destinationFolderInput = ""
 
     @AppStorage("syncDestinationFilename")
-    private var destinationFilename = "sportscode-sync.json"
+    private var destinationFilenameInput = "sportscode-sync.json"
+
+    @AppStorage("syncKickoffOffsetSecs")
+    private var kickoffOffsetSecsInput = ""
 
     @AppStorage("syncIntervalSeconds")
-    private var syncIntervalSeconds = 5
+    private var syncIntervalSecondsInput = "5"
 
     @Binding var isMenuPresented: Bool
 
+    private var requestURL: Result<URL, InputError> {
+        let input = requestURLInput.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !input.isEmpty else {
+            return .failure(.empty)
+        }
+
+        guard
+            var components = URLComponents(string: input),
+            let url = components.url,
+            ["http", "https"].contains(components.scheme?.lowercased() ?? ""),
+            components.host != nil
+        else {
+            return .failure(.invalid("Invalid URL"))
+        }
+
+        if case let .success(_offset) = kickoffOffsetSecs, let offset = _offset {
+            var queryItems = components.queryItems ?? []
+
+            // Replace an existing parameter rather than duplicating it.
+            queryItems.removeAll { $0.name == "kickoffOffsetSecs" }
+
+            queryItems.append(
+                URLQueryItem(
+                    name: "kickoffOffsetSecs",
+                    value: String(offset)
+                )
+            )
+
+            components.queryItems = queryItems
+
+            guard let url = components.url else {
+                return .failure(.invalid("Invalid URL and kickoff offset"))
+            }
+
+            return .success(url)
+        }
+
+        return .success(url)
+    }
+
+    private var destinationFolder: Result<URL, InputError> {
+        guard !destinationFolderInput.isEmpty else {
+            return .failure(.empty)
+        }
+
+        return .success(URL(fileURLWithPath: destinationFolderInput))
+    }
+
+    private var destinationFilename: Result<String, InputError> {
+        guard !destinationFilenameInput.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty else {
+            return .failure(.empty)
+        }
+
+        return .success(destinationFilenameInput)
+    }
+
     private var destinationURL: URL? {
-        guard !destinationFolder.isEmpty,
-              !destinationFilename.trimmingCharacters(
-                  in: .whitespacesAndNewlines
-              ).isEmpty
+        guard
+            case let .success(folder) = destinationFolder,
+            case let .success(filename) = destinationFilename
         else {
             return nil
         }
 
-        return URL(fileURLWithPath: destinationFolder)
-            .appendingPathComponent(destinationFilename)
+        return folder.appendingPathComponent(filename)
+    }
+
+    private var kickoffOffsetSecs: Result<Double?, InputError> {
+        let value = kickoffOffsetSecsInput.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
+        guard !value.isEmpty else {
+            return .success(nil)
+        }
+
+        guard
+            let number = Double(value),
+            number.isFinite
+        else {
+            return .failure(.invalid("Invalid number"))
+        }
+
+        guard number >= 0
+        else {
+            return .failure(.invalid("Must be >= 0"))
+        }
+
+        return .success(number)
+    }
+
+    private var syncIntervalSeconds: Result<Int, InputError> {
+        let value = syncIntervalSecondsInput.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
+        guard !value.isEmpty else {
+            return .failure(.empty)
+        }
+
+        guard let number = Int(value) else {
+            return .failure(.invalid("Invalid int"))
+        }
+
+        guard number >= 1
+        else {
+            return .failure(.invalid("Must be >= 1"))
+        }
+
+        return .success(number)
     }
 
     private var canStartSync: Bool {
-        guard let url = URL(string: requestURL),
-              ["http", "https"].contains(
-                  url.scheme?.lowercased() ?? ""
-              ),
-              url.host != nil,
-              destinationURL != nil
-        else {
-            return false
-        }
-
-        return true
+        requestURL.isSuccess && destinationURL != nil && syncIntervalSeconds.isSuccess
     }
 
     private var elapsedText: String {
@@ -297,18 +376,13 @@ struct MenuBarView: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Request URL")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                TextField(
-                    "https://example.com/api/data",
-                    text: $requestURL
-                )
-                .textFieldStyle(.roundedBorder)
-                .disabled(syncManager.isSyncing)
-            }
+            Input(
+                title: "Requset URL",
+                placeholder: "https://example.com/api/data",
+                value: $requestURLInput,
+                disabled: syncManager.isSyncing,
+                error: requestURL.error
+            )
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Destination folder")
@@ -321,9 +395,9 @@ struct MenuBarView: View {
                 .disabled(syncManager.isSyncing)
 
                 Text(
-                    destinationFolder.isEmpty
+                    destinationFolderInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         ? "No folder selected"
-                        : destinationFolder
+                        : destinationFolderInput
                 )
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
@@ -331,35 +405,29 @@ struct MenuBarView: View {
                 .textSelection(.enabled)
             }
 
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Filename")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Input(
+                title: "Filename",
+                placeholder: "sportscode-sync.json",
+                value: $destinationFilenameInput,
+                disabled: syncManager.isSyncing,
+                error: destinationFilename.error
+            )
 
-                TextField(
-                    "sportscode-sync.json",
-                    text: $destinationFilename
-                )
-                .textFieldStyle(.roundedBorder)
-                .disabled(syncManager.isSyncing)
-            }
+            Input(
+                title: "Kickoff offset (seconds)",
+                placeholder: "10",
+                value: $kickoffOffsetSecsInput,
+                disabled: syncManager.isSyncing,
+                error: kickoffOffsetSecs.error
+            )
 
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Sync interval (seconds)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                HStack {
-                    TextField(
-                        "5",
-                        value: $syncIntervalSeconds,
-                        format: .number
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 100)
-                    .disabled(syncManager.isSyncing)
-                }
-            }
+            Input(
+                title: "Sync interval (seconds)",
+                placeholder: "5",
+                value: $syncIntervalSecondsInput,
+                disabled: syncManager.isSyncing,
+                error: syncIntervalSeconds.error
+            )
 
             Divider()
 
@@ -369,8 +437,11 @@ struct MenuBarView: View {
                     get: { syncManager.isSyncing },
                     set: { enabled in
                         if enabled {
-                            guard canStartSync,
-                                  let destinationURL
+                            guard
+                                canStartSync,
+                                let destinationURL,
+                                case let .success(requestURL) = requestURL,
+                                case let .success(syncIntervalSeconds) = syncIntervalSeconds
                             else {
                                 syncManager.status =
                                     "Set URL and choose a folder"
@@ -388,6 +459,7 @@ struct MenuBarView: View {
                     }
                 )
             )
+            .disabled(!canStartSync)
             .toggleStyle(.switch)
 
             HStack(alignment: .top) {
@@ -455,7 +527,7 @@ struct MenuBarView: View {
                 )
 
                 DispatchQueue.main.async {
-                    destinationFolder = folderURL.path
+                    destinationFolderInput = folderURL.path
 
                     UserDefaults.standard.set(
                         bookmark,
@@ -475,5 +547,64 @@ struct MenuBarView: View {
                 print("Failed to save folder permission: \(error)")
             }
         }
+    }
+}
+
+enum InputError: Error {
+    case empty
+    case invalid(String)
+
+    var message: String {
+        switch self {
+        case .empty:
+            "Required"
+        case let .invalid(string):
+            string
+        }
+    }
+}
+
+struct Input: View {
+    let title: String
+    let placeholder: String
+
+    @Binding var value: String
+
+    var disabled = false
+    var error: InputError?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextField(placeholder, text: $value)
+                .textFieldStyle(.roundedBorder)
+                .disabled(disabled)
+
+            if let error {
+                Text(error.message)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+}
+
+extension Result {
+    var isSuccess: Bool {
+        if case .success = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    var error: Failure? {
+        guard case let .failure(error) = self else {
+            return nil
+        }
+        return error
     }
 }
