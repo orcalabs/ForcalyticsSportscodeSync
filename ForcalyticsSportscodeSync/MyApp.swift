@@ -37,24 +37,18 @@ final class SyncManager: ObservableObject {
     private var isRunningSync = false
     private var syncTask: Task<Void, Never>?
 
-    private var requestURL: URL?
-    private var destinationURL: URL?
-    private var securityScopedAccess = false
-
     func startSync(
         url: URL,
-        destination: URL,
+        filename: String,
         interval: Int
     ) {
         guard !isSyncing else { return }
 
-        requestURL = url
-        destinationURL = destination
         isSyncing = true
         status = "Syncing"
 
         syncTask = Task { [weak self] in
-            await self?.runSync()
+            await self?.runSync(url: url, filename: filename)
         }
 
         syncTimer?.invalidate()
@@ -66,7 +60,7 @@ final class SyncManager: ObservableObject {
                 guard let self, isSyncing else { return }
 
                 syncTask = Task { [weak self] in
-                    await self?.runSync()
+                    await self?.runSync(url: url, filename: filename)
                 }
             }
         }
@@ -98,42 +92,8 @@ final class SyncManager: ObservableObject {
         status = "Stopped"
     }
 
-    func setDestinationFolder(_ folderURL: URL) {
-        if securityScopedAccess {
-            destinationURL?.deletingLastPathComponent()
-                .stopAccessingSecurityScopedResource()
-        }
-
-        securityScopedAccess =
-            folderURL.startAccessingSecurityScopedResource()
-
-        // If access wasn't granted through a security-scoped URL,
-        // the app may still be able to access the folder normally.
-        destinationURL = folderURL.appendingPathComponent(
-            "sportscode-sync.json"
-        )
-    }
-
-    func setDestinationFilename(_ filename: String) {
-        guard let currentURL = destinationURL else { return }
-
-        let cleanedName = filename.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-
-        guard !cleanedName.isEmpty else { return }
-
-        destinationURL = currentURL
-            .deletingLastPathComponent()
-            .appendingPathComponent(cleanedName)
-    }
-
-    private func runSync() async {
-        guard
-            isSyncing,
-            !isRunningSync,
-            let requestURL,
-            let destinationURL
+    private func runSync(url: URL, filename: String) async {
+        guard isSyncing, !isRunningSync
         else {
             return
         }
@@ -144,7 +104,7 @@ final class SyncManager: ObservableObject {
         status = "Fetching data..."
 
         do {
-            var request = URLRequest(url: requestURL)
+            var request = URLRequest(url: url)
             request.httpMethod = "GET"
             request.timeoutInterval = 30
             request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -166,27 +126,40 @@ final class SyncManager: ObservableObject {
                 return
             }
 
-            // Create the parent folder if it doesn't exist.
-            let folderURL = destinationURL.deletingLastPathComponent()
+            guard let folderURL = try? DestinationFolderBookmark.resolve() else {
+                status = "Destination folder error, please re-select folder"
+                return
+            }
 
+            guard folderURL.startAccessingSecurityScopedResource() else {
+                status = "Unable to access destination folder"
+                return
+            }
+
+            defer {
+                folderURL.stopAccessingSecurityScopedResource()
+            }
+
+            // Create the parent folder if it doesn't exist.
             try FileManager.default.createDirectory(
-                at: folderURL,
+                at: folderURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
 
+            let destination = folderURL.appendingPathComponent(filename)
             let fileManager = FileManager.default
 
-            if fileManager.fileExists(atPath: destinationURL.path) {
-                let existingData = try Data(contentsOf: destinationURL)
+            if fileManager.fileExists(atPath: destination.path) {
+                let existingData = try Data(contentsOf: destination)
 
                 if existingData == data {
                     print("GET successful. No changes detected.")
                 } else {
-                    try data.write(to: destinationURL, options: .atomic)
+                    try data.write(to: destination, options: .atomic)
                     print("GET successful. File updated.")
                 }
             } else {
-                try data.write(to: destinationURL, options: .atomic)
+                try data.write(to: destination, options: .atomic)
                 print("GET successful. File created.")
             }
 
@@ -292,17 +265,6 @@ struct MenuBarView: View {
         return .success(destinationFilenameInput)
     }
 
-    private var destinationURL: URL? {
-        guard
-            case let .success(folder) = destinationFolder,
-            case let .success(filename) = destinationFilename
-        else {
-            return nil
-        }
-
-        return folder.appendingPathComponent(filename)
-    }
-
     private var kickoffOffsetSecs: Result<Double?, InputError> {
         let value = kickoffOffsetSecsInput.trimmingCharacters(
             in: .whitespacesAndNewlines
@@ -349,7 +311,11 @@ struct MenuBarView: View {
     }
 
     private var canStartSync: Bool {
-        requestURL.isSuccess && destinationURL != nil && syncIntervalSeconds.isSuccess
+        requestURL.isSuccess &&
+            destinationFolder.isSuccess &&
+            destinationFilename.isSuccess &&
+            kickoffOffsetSecs.isSuccess &&
+            syncIntervalSeconds.isSuccess
     }
 
     private var elapsedText: String {
@@ -359,7 +325,6 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            // Header
             HStack {
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.title2)
@@ -439,18 +404,16 @@ struct MenuBarView: View {
                         if enabled {
                             guard
                                 canStartSync,
-                                let destinationURL,
                                 case let .success(requestURL) = requestURL,
+                                case let .success(destinationFilename) = destinationFilename,
                                 case let .success(syncIntervalSeconds) = syncIntervalSeconds
                             else {
-                                syncManager.status =
-                                    "Set URL and choose a folder"
                                 return
                             }
 
                             syncManager.startSync(
                                 url: requestURL,
-                                destination: destinationURL,
+                                filename: destinationFilename,
                                 interval: syncIntervalSeconds
                             )
                         } else {
@@ -513,39 +476,23 @@ struct MenuBarView: View {
         panel.canCreateDirectories = true
 
         panel.begin { response in
-            guard response == .OK,
-                  let folderURL = panel.url
+            guard
+                response == .OK,
+                let folderURL = panel.url
             else {
                 return
             }
 
             do {
-                let bookmark = try folderURL.bookmarkData(
-                    options: [],
-                    includingResourceValuesForKeys: nil,
-                    relativeTo: nil
-                )
+                try DestinationFolderBookmark.save(folder: folderURL)
 
+                destinationFolderInput = folderURL.path
+
+                // Reopen the menu bar popover after selection.
                 DispatchQueue.main.async {
-                    destinationFolderInput = folderURL.path
-
-                    UserDefaults.standard.set(
-                        bookmark,
-                        forKey: "syncDestinationBookmark"
-                    )
-
-                    syncManager.setDestinationFolder(folderURL)
-
-                    // Reopen the menu bar popover after selection.
-                    DispatchQueue.main.asyncAfter(
-                        deadline: .now() + 0.3
-                    ) {
-                        isMenuPresented = true
-                    }
+                    isMenuPresented = true
                 }
-            } catch {
-                print("Failed to save folder permission: \(error)")
-            }
+            } catch {}
         }
     }
 }
@@ -573,6 +520,8 @@ struct Input: View {
     var disabled = false
     var error: InputError?
 
+    @FocusState private var isFocused: Bool
+
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(title)
@@ -582,8 +531,9 @@ struct Input: View {
             TextField(placeholder, text: $value)
                 .textFieldStyle(.roundedBorder)
                 .disabled(disabled)
+                .focused($isFocused)
 
-            if let error {
+            if let error, !isFocused {
                 Text(error.message)
                     .font(.caption)
                     .foregroundStyle(.red)
@@ -606,5 +556,51 @@ extension Result {
             return nil
         }
         return error
+    }
+}
+
+enum DestinationFolderBookmark {
+    private static var key = "syncDestinationFolderBookmark"
+
+    static func save(folder: URL) throws {
+        do {
+            let bookmark = try folder.bookmarkData(
+                options: .withSecurityScope,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+
+            UserDefaults.standard.set(bookmark, forKey: Self.key)
+        } catch {
+            print("Failed to save security bookmark: \(error)")
+            throw error
+        }
+    }
+
+    static func resolve() throws -> URL {
+        guard let bookmark = UserDefaults.standard.data(forKey: key) else {
+            print("Failed to resolve security bookmark")
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+
+        do {
+            var isStale = false
+
+            let folder = try URL(
+                resolvingBookmarkData: bookmark,
+                options: .withSecurityScope,
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+
+            if isStale {
+                try Self.save(folder: folder)
+            }
+
+            return folder
+        } catch {
+            print("Failed to resolve security bookmark: \(error)")
+            throw error
+        }
     }
 }
